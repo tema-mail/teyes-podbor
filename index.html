@@ -75,6 +75,33 @@ h1{font-size:clamp(26px,5vw,38px);font-weight:800;letter-spacing:-.01em}
 .toolbar button:hover{border-color:var(--accent)}
 .toolbar button:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 
+/* search */
+.search{position:sticky;top:0;z-index:5;background:var(--paper);padding:8px 0 10px;margin-bottom:6px}
+.search input{
+  width:100%;font:inherit;font-size:16px;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:10px;padding:11px 14px;
+}
+.search input:focus{outline:2px solid var(--focus);outline-offset:1px;border-color:var(--accent)}
+.q-sug{
+  position:absolute;left:0;right:0;top:54px;background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.12);overflow:hidden;max-height:70vh;overflow-y:auto;
+}
+.q-head{padding:9px 14px;font-size:13px;color:var(--muted);border-bottom:1px solid var(--line)}
+.q-head b{color:var(--accent)}
+.q-item{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;width:100%;text-align:left;font:inherit;
+  color:var(--ink);background:none;border:0;border-bottom:1px solid var(--line);padding:9px 14px;cursor:pointer;
+}
+.q-item:last-child{border-bottom:0}
+.q-item.on,.q-item:hover{background:var(--panel2)}
+.q-name{font-family:Archivo,sans-serif;font-weight:700;font-size:14px}
+.q-gen{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:1px 8px}
+.q-info{font-size:12.5px;color:var(--muted);margin-top:6px;min-height:1em}
+.q-info:empty{display:none}
+#tree details{scroll-margin-top:96px}
+.lvl-model.hit{animation:hit 1.6s ease}
+@keyframes hit{0%,40%{box-shadow:0 0 0 3px var(--accent)}100%{box-shadow:0 0 0 0 transparent}}
+
 /* tree */
 #tree{display:flex;flex-direction:column;gap:8px}
 details{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -188,6 +215,12 @@ footer a{color:var(--accent)}
     <div class="item"><span class="dot info"></span>сборки сверены по фото, карточки/пласта не хватает</div>
     <div class="item"><span class="dot warn"></span>только прайс поставщика — буквы А/В/С не проверены по фото</div>
     <div class="item"><span class="dot dim"></span>объединено с другой карточкой</div>
+  </div>
+
+  <div class="search" role="search">
+    <input id="q" type="search" placeholder="Поиск: Тойота Камри, крузак 200, Vezel 2016…" autocomplete="off" aria-label="Поиск по маркам и моделям">
+    <div class="q-sug" id="qSug" hidden></div>
+    <div class="q-info" id="qInfo"></div>
   </div>
 
   <div class="toolbar">
@@ -65769,6 +65802,7 @@ function buildTree(){
     totalSb += brandTotal;
     const dBrand = document.createElement('details');
     dBrand.className = 'lvl-brand';
+    dBrand.dataset.brand = brand;
     dBrand.innerHTML = `<summary>${svgArrow}<span class="name">${brand}</span><span class="count">${brandTotal} сборок</span></summary>`;
     const brandBody = document.createElement('div'); brandBody.style.padding='0 12px 12px';
     dBrand.appendChild(brandBody);
@@ -65781,6 +65815,7 @@ function buildTree(){
       const modelTotal = Object.values(model['поколения']).reduce((s,g)=>s+g['сборки'].length,0);
       const dModel = document.createElement('details');
       dModel.className = 'lvl-model';
+      dModel.dataset.key = brand + '|' + label;
       dModel.innerHTML = `<summary>${svgArrow}<span class="name">${label}</span><span class="badge ${cls}">${statusLabel(cls)}</span><span class="count">${modelTotal}</span></summary>`;
       const modelInner = document.createElement('div'); modelInner.className='model-inner';
       dModel.appendChild(modelInner);
@@ -65789,6 +65824,7 @@ function buildTree(){
         totalGens++;
         const dGen = document.createElement('details');
         dGen.className = 'lvl-gen';
+        dGen.dataset.gen = gen;
         dGen.innerHTML = `<summary>${svgArrow}<span class="name">${gen}</span><span class="count">${gdata['сборки'].length}</span></summary>`;
         const genBody = document.createElement('div'); genBody.className='gen-body';
         for(const sb of gdata['сборки']){
@@ -65852,6 +65888,264 @@ buildFlat();
 
 document.getElementById('expandAll').onclick = ()=>document.querySelectorAll('#tree details').forEach(d=>d.open=true);
 document.getElementById('collapseAll').onclick = ()=>document.querySelectorAll('#tree details').forEach(d=>d.open=false);
+</script>
+<script>
+// Поиск по каталогу сборок: русские названия и жаргон, транслит, неправильная
+// раскладка, опечатки, год выпуска. generate.py вставляет файл в страницу вместо
+// __SEARCH_JS__; чистые функции экспортируются для проверки в node.
+
+// [регулярка по «Марка Модель», 'русские названия через запятую']
+const SEARCH_ALIASES = [
+  ['^Toyota', 'тойота, тоета, таета, тоёта'], ['^Honda', 'хонда'], ['^Subaru', 'субару'],
+  ['^Lexus', 'лексус'], ['^Nissan', 'ниссан, нисан'], ['^Kia', 'киа, кия'],
+  ['^Mitsubishi', 'мицубиси, митсубиси, мицубиши, митсубиши, мицу'], ['^Acura', 'акура'],
+  ['^Audi', 'ауди'], ['^BMW', 'бмв, бэха, бумер'], ['^Changan', 'чанган'], ['^Chery', 'чери, черри'],
+  ['^Chevrolet', 'шевроле, шевролет, шеви'], ['^Citroen', 'ситроен'], ['^Fiat', 'фиат'],
+  ['^Ford', 'форд'], ['^Geely', 'джили'], ['^Haval', 'хавал, хавейл'],
+  ['^Hyundai', 'хендай, хундай, хюндай, хёндай, хендэ'], ['^Infiniti', 'инфинити'],
+  ['^Jeep', 'джип'], ['^Lada', 'лада, ваз'], ['^LandRover', 'ленд ровер, лэнд ровер, ровер'],
+  ['^Mazda', 'мазда'], ['^Mercedes', 'мерседес, мерс, бенц, мерин'], ['^OMODA', 'омода'],
+  ['^Opel', 'опель'], ['^Peugeot', 'пежо'], ['^Porsche', 'порше, порш'], ['^Renault', 'рено'],
+  ['^Skoda', 'шкода'], ['^Suzuki', 'сузуки'], ['^UAZ', 'уаз, патриот'],
+  ['^Volkswagen', 'фольксваген, фольц, вольксваген, вв, vw'],
+  // Toyota
+  ['Land Cruiser$', 'крузак, крузер, ленд крузер, лк, lc'], ['Land Cruiser Prado', 'прадо, прадик'],
+  ['RAV4', 'рав, рав4, рафик'], ['Camry', 'камри'], ['Corolla', 'королла, корола'],
+  ['Harrier', 'харриер, харьер'], ['Highlander', 'хайлендер, хайландер'], ['Raize', 'райз'],
+  ['Alphard', 'альфард'], ['Vellfire', 'вельфаер, велфаер'], ['Mark II', 'марк, марк2, марковник'],
+  ['Mark X', 'марк икс'], ['Crown', 'краун'], ['Hilux', 'хайлюкс, хайлакс'], ['Prius', 'приус'],
+  ['Vitz', 'витц, витс, ярис'], ['Noah', 'ноа, вокси, эскваер'], ['Premio', 'премио, аллион'],
+  ['Probox', 'пробокс, саксид'], ['Sienta', 'сиента'], ['Hiace', 'хайс, хайэйс'],
+  ['Fortuner', 'фортунер'], ['Chaser', 'чайзер'], ['Aqua', 'аква'], ['Caldina', 'калдина'],
+  ['Estima', 'эстима, превия'], ['Funcargo', 'функарго'], ['Passo', 'пассо'], ['Ipsum', 'ипсум'],
+  ['Tundra', 'тундра'], ['4Runner', 'форраннер, 4раннер'], ['C-HR', 'чр, сихаэр'],
+  // Honda
+  ['Vezel', 'везел, везель'], ['CR-V', 'црв, срв, црви'], ['Fit', 'фит, джаз'], ['Freed', 'фрид'],
+  ['StepWGN', 'степвагон, степ'], ['Accord', 'аккорд, акорд'], ['Civic', 'цивик'],
+  ['Odyssey', 'одиссей'], ['Stream', 'стрим'], ['N-BOX', 'нбокс, энбокс'], ['Shuttle', 'шаттл'],
+  // Nissan
+  ['X-Trail', 'икстрейл, х трейл, экстрейл, хтрейл'], ['Qashqai', 'кашкай'], ['Note', 'ноут'],
+  ['Serena', 'серена'], ['Patrol', 'патрол'], ['Murano', 'мурано'], ['Teana', 'теана'],
+  ['Tiida', 'тиида, тида'], ['Almera', 'альмера'], ['Leaf', 'лиф'], ['Juke', 'жук'],
+  ['Wingroad', 'вингроуд'], ['Skyline', 'скайлайн'],
+  // Subaru, Mitsubishi, Lexus
+  ['Forester', 'форестер, фористер'], ['Outback', 'аутбек'], ['Impreza', 'импреза'],
+  ['Legacy', 'легаси'], ['Outlander', 'аутлендер, аутлэндер'], ['Pajero', 'паджеро, паджерик'],
+  ['Lancer', 'лансер'], ['Delica', 'делика'], ['Lexus RX', 'рх, эрикс'], ['Lexus LX', 'лх, элх'],
+  // Kia, Hyundai
+  ['Kia Rio', 'рио'], ['Sportage', 'спортейдж, спортаж'], ['Sorento', 'соренто'],
+  ['Cerato', 'серато, церато'], ['Seltos', 'селтос'], ['Solaris', 'солярис, солик'],
+  ['Creta', 'крета'], ['Tucson', 'туссан, туксон'], ['Santa Fe', 'санта фе, сантафе'],
+  // Lada, VW, Skoda и др.
+  ['Lada 2110', 'десятка'], ['Lada 2112', 'двенашка'], ['Lada 2114', 'четырка, четырнадцатая'],
+  ['Lada 2115', 'пятнашка'], ['Vesta', 'веста'], ['Granta', 'гранта'], ['Niva', 'нива'],
+  ['Priora', 'приора'], ['Kalina', 'калина'], ['Largus', 'ларгус'], ['XRay', 'иксрей'],
+  ['Polo', 'поло'], ['Tiguan', 'тигуан'], ['Passat', 'пассат'], ['Golf', 'гольф'],
+  ['Touareg', 'туарег'], ['Multivan', 'мультивэн, транспортер, т5'], ['Octavia', 'октавия'],
+  ['Kodiaq', 'кодиак'], ['Jolion', 'джолион'], ['Tiggo', 'тигго, тиго'], ['Coolray', 'кулрей'],
+  ['G-Class', 'гелик, гелендваген'], ['Sprinter', 'спринтер'], ['Duster', 'дастер'],
+  ['Logan', 'логан'], ['Focus', 'фокус'], ['Range Rover', 'рендж, рэндж'], ['Jimny', 'джимни'],
+];
+
+const KB_EN = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+const KB_RU = 'йцукенгшщзхъфывапролджэячсмитьбюё';
+const TR = {а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ж:'zh',з:'z',и:'i',й:'i',к:'k',л:'l',м:'m',н:'n',
+  о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'ts',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'i',ь:'',
+  э:'e',ю:'iu',я:'ia'};
+
+const swapKb = (s, from, to) => [...s].map(c => { const i = from.indexOf(c); return i < 0 ? c : to[i]; }).join('');
+const translit = s => [...s].map(c => TR[c] ?? c).join('');
+// латиница «как слышится»: camry и камри сходятся в kamri, toyota и тойота – в toiota
+function skel(w){
+  w = w.replace(/ph/g,'f').replace(/gh/g,'').replace(/ck/g,'k').replace(/qu/g,'kv')
+       .replace(/ee/g,'i').replace(/oo/g,'u').replace(/x/g,'ks').replace(/w/g,'v')
+       .replace(/y/g,'i').replace(/c(?!h)/g,'k').replace(/q/g,'k').replace(/j/g,'dzh');
+  const d = w.replace(/([a-z])\1+/g,'$1');
+  return d.length < 2 ? w : d;
+}
+const isCyr = w => /[а-я]/.test(w);
+const words = s => s.toLowerCase().replace(/ё/g,'е').split(/[^a-zа-я0-9]+/).filter(Boolean);
+// в запросе CR-V, X-Trail склеиваем, «х5» – латинский X, одиночные буквы не ищем
+const CLASS_LETTER = {а:'a',в:'b',с:'c',е:'e',м:'m',г:'g',р:'r',л:'l'};
+const queryWords = s => words(s.toLowerCase()
+  .replace(/(^|[^а-яa-z])([авсемгрлa-z])[\s-]*(?:класс|class)/g, (m, p, l) => p + (CLASS_LETTER[l] || l) + 'class') // «е класс» → E-Class
+  .replace(/([a-zа-я0-9])[-\/]([a-zа-я0-9])/g, '$1$2').replace(/(^|[^а-я])х(?=\d)/g, '$1x'))
+  .filter(w => w.length > 1 || /\d/.test(w));
+const toKey = w => skel(isCyr(w) ? translit(w) : w);
+
+// варианты слова запроса: как есть и «набрано не в той раскладке»
+function queryVariants(w){
+  if (/^\d+$/.test(w)) return w === '2' ? [w, 'ii'] : w === '3' ? [w, 'iii'] : [w]; // Mark II
+  if (isCyr(w)) return [...new Set([toKey(w), skel(swapKb(w, KB_RU, KB_EN))])];
+  return [...new Set([toKey(w), toKey(swapKb(w, KB_EN, KB_RU))])];
+}
+
+// расстояние Дамерау–Левенштейна (перестановка соседних букв = одна ошибка)
+function dl(a, b){
+  const m = a.length, n = b.length, d = [];
+  for (let i = 0; i <= m; i++){ d[i] = [i]; }
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++){
+    const c = a[i-1] === b[j-1] ? 0 : 1;
+    d[i][j] = Math.min(d[i-1][j] + 1, d[i][j-1] + 1, d[i-1][j-1] + c);
+    if (i > 1 && j > 1 && a[i-1] === b[j-2] && a[i-2] === b[j-1]) d[i][j] = Math.min(d[i][j], d[i-2][j-2] + 1);
+  }
+  return d[m][n];
+}
+
+// 3 – точное слово, 2.5 – начало слова (ещё печатает), меньше 2 – с опечаткой
+function tokScore(v, t){
+  if (v === t) return 3;
+  if (/^\d+$/.test(v)) return /^[a-z]+\d+$/.test(t) && t.endsWith(v) ? 2.5 : 0; // 150 → j150
+  if (v.length >= 2 && t.startsWith(v)) return 2.5;
+  const lim = v.length < 4 ? 0 : v.length < 7 ? 1 : 2;
+  if (!lim) return 0;
+  const d = Math.min(dl(v, t), t.length > v.length ? dl(v, t.slice(0, v.length)) : 99);
+  return d <= lim ? 2 - 0.6 * d : 0;
+}
+
+function keysOf(text){
+  const out = new Map(); // ключ → слово для показа
+  const add = (k, w) => { if (k && (k.length > 1 || /\d/.test(k)) && !out.has(k)) out.set(k, w); };
+  for (const w of words(text)) add(toKey(w), w);
+  // CR-V, X-Trail, N-BOX ищутся и слитно
+  for (const m of text.matchAll(/[A-Za-z0-9]+(?:[-\/][A-Za-z0-9]+)+/g)) add(toKey(m[0].toLowerCase().replace(/[-\/]/g,'')), m[0]);
+  return out;
+}
+
+function yearRanges(text){
+  const r = [];
+  for (const m of text.matchAll(/((?:19|20)\d\d)(?:\s*[-–—]\s*((?:19|20)\d\d)|\s*(\+))?/g))
+    r.push([+m[1], m[2] ? +m[2] : m[3] ? 2100 : +m[1]]);
+  return r;
+}
+
+function buildIndex(data){
+  const idx = [];
+  for (const [brand, models] of Object.entries(data)) for (const [label, model] of Object.entries(models)){
+    const full = brand + ' ' + label;
+    const alias = SEARCH_ALIASES.filter(([re]) => new RegExp(re).test(full)).map(a => a[1]).join(', ');
+    const own = keysOf(full + ' ' + alias.replace(/,/g,' '));
+    for (const a of alias.split(',')){ const k = toKey(a.trim().replace(/\s+/g,'')); if (k && !own.has(k)) own.set(k, a.trim()); }
+    const gens = Object.keys(model['поколения']).map(g => ({ name: g, keys: keysOf(g), years: yearRanges(g) }));
+    idx.push({ brand, label, own, gens, years: yearRanges(label) });
+  }
+  return idx;
+}
+
+function bestIn(vars, keys){
+  let best = 0, word = '';
+  for (const v of vars) for (const [k, w] of keys){ const s = tokScore(v, k); if (s > best){ best = s; word = w; } }
+  return [best, word];
+}
+
+// результат: [{rec, score, gens:Set, fixes:[[набрано, исправлено]]}], strict – все слова нашлись
+function search(idx, query){
+  const qw = queryWords(query);
+  if (!qw.length) return { strict: true, items: [] };
+  const run = strict => {
+    const items = [];
+    for (const rec of idx){
+      let score = 0, hit = 0, ok = true; const gens = new Set(), fixes = [];
+      for (const w of qw){
+        let best = 0, fix = '';
+        if (/^(19|20)\d\d$/.test(w)){
+          const y = +w, inR = r => r.some(([a, b]) => y >= a && y <= b);
+          rec.gens.forEach(g => { if (inR(g.years)) gens.add(g.name); });
+          if (gens.size || inR(rec.years)) best = 2;
+        }
+        const vars = queryVariants(w);
+        const [s0, w0] = bestIn(vars, rec.own);
+        if (s0 > best){ best = s0; fix = s0 < 2.5 ? w0 : ''; }
+        for (const g of rec.gens){
+          const s = bestIn(vars, g.keys)[0] * 0.9; // своё имя модели важнее упоминания в поколении
+          if (s >= 2 && s > s0) gens.add(g.name);
+          if (s > best){ best = s; fix = ''; }
+        }
+        if (fix) fixes.push([w, fix]);
+        if (best) { score += best; hit++; } else if (strict) { ok = false; break; }
+      }
+      if (ok && hit) items.push({ rec, score, gens, fixes });
+    }
+    items.sort((a, b) => b.score - a.score);
+    // есть точное попадание – хвост из далёких опечаток не показываем
+    return items.filter(i => i.score >= items[0].score * 0.75);
+  };
+  const items = run(true);
+  return items.length ? { strict: true, items } : { strict: false, items: run(false).slice(0, 8) };
+}
+
+if (typeof module !== 'undefined') module.exports = { buildIndex, search, toKey, queryVariants };
+
+if (typeof document !== 'undefined') (function(){
+  const input = document.getElementById('q'), box = document.getElementById('qSug'),
+        info = document.getElementById('qInfo'), idx = buildIndex(DATA.data);
+  const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const keyOf = r => r.brand + '|' + r.label;
+  let res = { items: [] }, sel = 0;
+
+  function filterTree(items){
+    const on = new Set(items.map(i => keyOf(i.rec))), active = input.value.trim() !== '';
+    document.querySelectorAll('#tree .lvl-model').forEach(d => { d.hidden = active && !on.has(d.dataset.key); });
+    document.querySelectorAll('#tree .lvl-brand').forEach(b => {
+      const any = b.querySelector('.lvl-model:not([hidden])');
+      b.hidden = active && !any;
+      if (active) b.open = !!any;
+    });
+    if (active && items.length <= 3) items.forEach(i => openModel(i, false));
+  }
+
+  function openModel(item, scroll){
+    const d = [...document.querySelectorAll('#tree .lvl-model')].find(x => x.dataset.key === keyOf(item.rec));
+    if (!d) return;
+    d.hidden = false; d.closest('.lvl-brand').hidden = false; d.closest('.lvl-brand').open = true; d.open = true;
+    d.querySelectorAll('.lvl-gen').forEach(g => { if (item.gens.has(g.dataset.gen)) g.open = true; });
+    if (scroll){
+      const g = [...d.querySelectorAll('.lvl-gen')].find(x => item.gens.has(x.dataset.gen));
+      (g || d).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      d.classList.remove('hit'); void d.offsetWidth; d.classList.add('hit');
+    }
+  }
+
+  function render(){
+    const q = input.value.trim();
+    res = q ? search(idx, q) : { strict: true, items: [] };
+    sel = 0;
+    filterTree(res.strict ? res.items : []);
+    if (!q){ box.hidden = true; info.textContent = ''; return; }
+    const top = res.items[0], fixes = top ? top.fixes : [];
+    let head = '';
+    if (!res.items.length) head = `<div class="q-head">Ничего похожего. Попробуйте марку или модель: «Тойота», «Vezel», «крузак 200».</div>`;
+    else if (!res.strict) head = `<div class="q-head">Точного совпадения нет. Возможно, вы имели в виду:</div>`;
+    else if (fixes.length) head = `<div class="q-head">Исправили опечатку: ${fixes.map(([a, b]) => `«${esc(a)}» → <b>${esc(b[0].toUpperCase() + b.slice(1))}</b>`).join(', ')}</div>`;
+    box.innerHTML = head + res.items.slice(0, 8).map((it, i) => {
+      const g = [...it.gens].slice(0, 3).map(n => `<span class="q-gen">${esc(n.replace(it.rec.label, '').replace(/^\s*[·,]\s*/, '') || n)}</span>`).join('');
+      return `<button type="button" class="q-item${i === sel ? ' on' : ''}" data-i="${i}"><span class="q-name">${esc(it.rec.label)}</span>${g}</button>`;
+    }).join('');
+    box.hidden = false;
+    info.textContent = res.strict && res.items.length ? `Найдено моделей: ${res.items.length}` + (res.items.length > 8 ? ' – все показаны в дереве ниже' : '') : '';
+  }
+
+  function choose(i){
+    const it = res.items[i]; if (!it) return;
+    box.hidden = true; openModel(it, true);
+  }
+
+  input.addEventListener('input', render);
+  input.addEventListener('focus', () => { if (input.value.trim()) box.hidden = false; });
+  input.addEventListener('keydown', e => {
+    const n = Math.min(res.items.length, 8);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp'){
+      if (!n) return; e.preventDefault();
+      sel = (sel + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+      box.querySelectorAll('.q-item').forEach((b, i) => b.classList.toggle('on', i === sel));
+    } else if (e.key === 'Enter'){ e.preventDefault(); choose(sel); }
+    else if (e.key === 'Escape'){ input.value = ''; render(); }
+  });
+  box.addEventListener('mousedown', e => { const b = e.target.closest('.q-item'); if (b){ e.preventDefault(); choose(+b.dataset.i); } });
+  document.addEventListener('click', e => { if (!e.target.closest('.search')) box.hidden = true; });
+})();
+
 </script>
 
 </html>
